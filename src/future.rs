@@ -4,7 +4,12 @@ use crate::{
     AsyncReceiver, ReceiveError, SendError,
 };
 use core::{
-    cell::UnsafeCell, fmt::Debug, marker::PhantomPinned, mem::transmute, pin::Pin, task::Poll,
+    cell::UnsafeCell,
+    fmt::Debug,
+    marker::PhantomPinned,
+    mem::{transmute, ManuallyDrop},
+    pin::Pin,
+    task::Poll,
 };
 
 use branches::{likely, unlikely};
@@ -438,9 +443,9 @@ impl<'a, T> ReceiveStream<'a, T> {
 /// ReceiveStreamOwned is a stream for receiving objects from a channel
 /// asynchronously and owns the receiver.
 pub struct ReceiveStreamOwned<T: 'static> {
-    future: Pin<Box<ReceiveFuture<'static, T>>>,
+    future: ManuallyDrop<Pin<Box<ReceiveFuture<'static, T>>>>,
     terminated: bool,
-    receiver: Pin<Box<AsyncReceiver<T>>>,
+    receiver: ManuallyDrop<Pin<Box<AsyncReceiver<T>>>>,
 }
 
 impl<T: 'static> Debug for ReceiveStreamOwned<T> {
@@ -460,7 +465,9 @@ impl<T: 'static> Stream for ReceiveStreamOwned<T> {
             return Poll::Ready(None);
         }
         // SAFETY: future is pinned as stream is pinned to a location too
-        match self.future.as_mut().poll(cx) {
+        // `future` is initialized and pinned for the lifetime of the stream.
+        let future = &mut *self.future;
+        match future.as_mut().poll(cx) {
             Poll::Ready(res) => match res {
                 Ok(d) => Poll::Ready(Some(d)),
                 Err(_) => {
@@ -476,7 +483,8 @@ impl<T: 'static> Stream for ReceiveStreamOwned<T> {
 
 impl<T: 'static> FusedStream for ReceiveStreamOwned<T> {
     fn is_terminated(&self) -> bool {
-        self.receiver.is_terminated()
+        // Receiver is alive while the stream exists.
+        (&*self.receiver).is_terminated()
     }
 }
 
@@ -493,9 +501,19 @@ impl<T: 'static> ReceiveStreamOwned<T> {
             )
         };
         ReceiveStreamOwned {
-            future,
+            future: ManuallyDrop::new(future),
             terminated: false,
-            receiver,
+            receiver: ManuallyDrop::new(receiver),
+        }
+    }
+}
+
+impl<T: 'static> Drop for ReceiveStreamOwned<T> {
+    fn drop(&mut self) {
+        // Ensure the future (which borrows the receiver) is dropped before the receiver.
+        unsafe {
+            ManuallyDrop::drop(&mut self.future);
+            ManuallyDrop::drop(&mut self.receiver);
         }
     }
 }

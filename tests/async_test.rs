@@ -718,6 +718,39 @@ mod asyncs {
         assert_eq!(stream.next().await, None);
     }
 
+    #[tokio::test]
+    async fn stream_owned() {
+        use futures::stream::StreamExt;
+        let (s, r) = new(Some(0));
+        tokio::spawn(async move {
+            for i in 0..MESSAGES {
+                s.send(i).await.unwrap();
+            }
+        });
+        let mut stream = r.into_stream();
+
+        assert!(!stream.is_terminated());
+        for i in 0..MESSAGES {
+            assert_eq!(stream.next().await.unwrap(), i);
+        }
+        assert_eq!(stream.next().await, None);
+        assert!(stream.is_terminated());
+        assert_eq!(stream.next().await, None);
+    }
+
+    #[tokio::test]
+    async fn stream_owned_drop_closes() {
+        use futures::stream::StreamExt;
+        let (s, r) = bounded_async::<u8>(1);
+        let mut stream = r.into_stream();
+
+        s.send(1).await.unwrap();
+        assert_eq!(stream.next().await, Some(1));
+
+        drop(stream);
+        assert!(s.send(2).await.is_err());
+    }
+
     async fn two_msg(size: usize) {
         let (s, r) = bounded_async::<u8>(size);
         tokio::spawn(async move {
