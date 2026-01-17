@@ -1415,6 +1415,14 @@ impl<T> AsyncReceiver<T> {
         ReceiveStream::new_borrowed(self)
     }
 
+    /// Creates an asynchronous stream that owns the receiver.
+    ///
+    /// This is useful when the stream needs to outlive the receiver borrow.
+    #[inline(always)]
+    pub fn into_stream(self) -> ReceiveStreamOwned<T> {
+        ReceiveStreamOwned::new(self)
+    }
+
     /// Returns a [`DrainIntoBlockingFuture`] to drain all available messages from the channel
     /// into the provided vector, awaiting until at least one message is received.
     ///

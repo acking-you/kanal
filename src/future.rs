@@ -3,7 +3,9 @@ use crate::{
     signal::AsyncSignal,
     AsyncReceiver, ReceiveError, SendError,
 };
-use core::{cell::UnsafeCell, fmt::Debug, marker::PhantomPinned, pin::Pin, task::Poll};
+use core::{
+    cell::UnsafeCell, fmt::Debug, marker::PhantomPinned, mem::transmute, pin::Pin, task::Poll,
+};
 
 use branches::{likely, unlikely};
 use futures_core::{FusedStream, Future, Stream};
@@ -427,6 +429,71 @@ impl<'a, T> ReceiveStream<'a, T> {
         future.is_stream = true;
         ReceiveStream {
             future: Box::pin(future),
+            terminated: false,
+            receiver,
+        }
+    }
+}
+
+/// ReceiveStreamOwned is a stream for receiving objects from a channel
+/// asynchronously and owns the receiver.
+pub struct ReceiveStreamOwned<T: 'static> {
+    future: Pin<Box<ReceiveFuture<'static, T>>>,
+    terminated: bool,
+    receiver: Pin<Box<AsyncReceiver<T>>>,
+}
+
+impl<T: 'static> Debug for ReceiveStreamOwned<T> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "ReceiveStreamOwned {{ .. }}")
+    }
+}
+
+impl<T: 'static> Stream for ReceiveStreamOwned<T> {
+    type Item = T;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut core::task::Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        if unlikely(self.terminated) {
+            return Poll::Ready(None);
+        }
+        // SAFETY: future is pinned as stream is pinned to a location too
+        match self.future.as_mut().poll(cx) {
+            Poll::Ready(res) => match res {
+                Ok(d) => Poll::Ready(Some(d)),
+                Err(_) => {
+                    mark_branch_unlikely();
+                    self.terminated = true;
+                    Poll::Ready(None)
+                }
+            },
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+impl<T: 'static> FusedStream for ReceiveStreamOwned<T> {
+    fn is_terminated(&self) -> bool {
+        self.receiver.is_terminated()
+    }
+}
+
+impl<T: 'static> ReceiveStreamOwned<T> {
+    pub(crate) fn new(receiver: AsyncReceiver<T>) -> Self {
+        let receiver = Box::pin(receiver);
+        let mut future = ReceiveFuture::new_ref(&receiver.internal);
+        future.is_stream = true;
+        let future = unsafe {
+            // Safety: `receiver` is pinned and will not be moved for the lifetime
+            // of `future`, so extending the lifetime is safe here.
+            transmute::<Pin<Box<ReceiveFuture<'_, T>>>, Pin<Box<ReceiveFuture<'static, T>>>>(
+                Box::pin(future),
+            )
+        };
+        ReceiveStreamOwned {
+            future,
             terminated: false,
             receiver,
         }
