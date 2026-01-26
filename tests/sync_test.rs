@@ -1,7 +1,7 @@
 mod utils;
 use utils::*;
 
-use kanal::{bounded, unbounded, ReceiveError, Receiver, SendError, Sender};
+use kanal_plus::{bounded, unbounded, ReceiveError, Receiver, SendError, Sender};
 use std::{
     sync::{
         atomic::{AtomicUsize, Ordering},

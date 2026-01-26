@@ -40,7 +40,7 @@ use signal::*;
 # Examples
 
 ```
-let (sender, _r) = kanal::bounded::<u64>(0);
+let (sender, _r) = kanal_plus::bounded::<u64>(0);
 let sync_sender=sender.clone_async();
 ```
 "##
@@ -57,7 +57,7 @@ pub struct Sender<T> {
 /// # Examples
 ///
 /// ```
-/// let (sender, _r) = kanal::bounded_async::<u64>(0);
+/// let (sender, _r) = kanal_plus::bounded_async::<u64>(0);
 /// let sync_sender=sender.clone_sync();
 /// ```
 #[cfg(feature = "async")]
@@ -126,12 +126,12 @@ macro_rules! shared_impl {
         /// # Examples
         ///
         /// ```
-        /// let (s, r) = kanal::bounded::<u64>(0);
+        /// let (s, r) = kanal_plus::bounded::<u64>(0);
         /// assert_eq!(s.is_bounded(),true);
         /// assert_eq!(r.is_bounded(),true);
         /// ```
         /// ```
-        /// let (s, r) = kanal::unbounded::<u64>();
+        /// let (s, r) = kanal_plus::unbounded::<u64>();
         /// assert_eq!(s.is_bounded(),false);
         /// assert_eq!(r.is_bounded(),false);
         /// ```
@@ -143,7 +143,7 @@ macro_rules! shared_impl {
         /// # Examples
         ///
         /// ```
-        /// let (s, r) = kanal::unbounded::<u64>();
+        /// let (s, r) = kanal_plus::unbounded::<u64>();
         /// assert_eq!(s.len(),0);
         /// assert_eq!(r.len(),0);
         /// s.send(10);
@@ -158,7 +158,7 @@ macro_rules! shared_impl {
         /// # Examples
         ///
         /// ```
-        /// let (s, r) = kanal::unbounded::<u64>();
+        /// let (s, r) = kanal_plus::unbounded::<u64>();
         /// assert_eq!(s.is_empty(),true);
         /// assert_eq!(r.is_empty(),true);
         /// ```
@@ -172,7 +172,7 @@ macro_rules! shared_impl {
         /// # Examples
         ///
         /// ```
-        /// let (s, r) = kanal::bounded(1);
+        /// let (s, r) = kanal_plus::bounded(1);
         /// s.send("Hi!").unwrap();
         /// assert_eq!(s.is_full(),true);
         /// assert_eq!(r.is_full(),true);
@@ -186,12 +186,12 @@ macro_rules! shared_impl {
         /// # Examples
         ///
         /// ```
-        /// let (s, r) = kanal::bounded::<u64>(0);
+        /// let (s, r) = kanal_plus::bounded::<u64>(0);
         /// assert_eq!(s.capacity(),0);
         /// assert_eq!(r.capacity(),0);
         /// ```
         /// ```
-        /// let (s, r) = kanal::unbounded::<u64>();
+        /// let (s, r) = kanal_plus::unbounded::<u64>();
         /// assert_eq!(s.capacity(),usize::MAX);
         /// assert_eq!(r.capacity(),usize::MAX);
         /// ```
@@ -203,7 +203,7 @@ macro_rules! shared_impl {
         /// # Examples
         ///
         /// ```
-        /// let (s, r) = kanal::unbounded::<u64>();
+        /// let (s, r) = kanal_plus::unbounded::<u64>();
         /// let receiver_clone=r.clone();
         /// assert_eq!(r.receiver_count(),2);
         /// ```
@@ -215,7 +215,7 @@ macro_rules! shared_impl {
         /// # Examples
         ///
         /// ```
-        /// let (s, r) = kanal::unbounded::<u64>();
+        /// let (s, r) = kanal_plus::unbounded::<u64>();
         /// let sender_clone=s.clone();
         /// assert_eq!(r.sender_count(),2);
         /// ```
@@ -228,7 +228,7 @@ macro_rules! shared_impl {
         /// # Examples
         ///
         /// ```
-        /// let (s, r) = kanal::unbounded::<u64>();
+        /// let (s, r) = kanal_plus::unbounded::<u64>();
         /// // closes channel on both sides and has same effect as r.close();
         /// s.close().unwrap();
         /// assert_eq!(r.is_closed(),true);
@@ -251,7 +251,7 @@ macro_rules! shared_impl {
         /// # Examples
         ///
         /// ```
-        /// let (s, r) = kanal::unbounded::<u64>();
+        /// let (s, r) = kanal_plus::unbounded::<u64>();
         /// // closes channel on both sides and has same effect as r.close();
         /// s.close();
         /// assert_eq!(r.is_closed(),true);
@@ -277,7 +277,7 @@ macro_rules! shared_send_impl {
         ///
         /// ```
         /// # use std::thread::spawn;
-        /// let (s, r) = kanal::bounded(0);
+        /// let (s, r) = kanal_plus::bounded(0);
         /// let t=spawn( move || {
         ///     loop{
         ///         if s.try_send(1).is_ok() {
@@ -318,7 +318,7 @@ macro_rules! shared_send_impl {
         ///
         /// ```
         /// # use std::thread::spawn;
-        /// let (s, r) = kanal::bounded(0);
+        /// let (s, r) = kanal_plus::bounded(0);
         /// let t=spawn( move || {
         ///     loop{
         ///         if s.try_send_realtime(1).is_ok() {
@@ -354,7 +354,7 @@ macro_rules! shared_send_impl {
         /// # Examples
         ///
         /// ```
-        /// let (s, r) = kanal::unbounded::<u64>();
+        /// let (s, r) = kanal_plus::unbounded::<u64>();
         /// drop(r); // drop receiver and disconnect the receive side from the channel
         /// assert_eq!(s.is_disconnected(),true);
         /// # anyhow::Ok(())
@@ -377,7 +377,7 @@ macro_rules! shared_recv_impl {
         ///
         /// ```
         /// # use std::thread::spawn;
-        /// # let (s, r) = kanal::bounded(0);
+        /// # let (s, r) = kanal_plus::bounded(0);
         /// # let t=spawn(move || {
         /// #      s.send("Buddy")?;
         /// #      anyhow::Ok(())
@@ -430,7 +430,7 @@ macro_rules! shared_recv_impl {
         ///
         /// ```
         /// # use std::thread::spawn;
-        /// # let (s, r) = kanal::bounded(0);
+        /// # let (s, r) = kanal_plus::bounded(0);
         /// # let t=spawn(move || {
         /// #      s.send("Buddy")?;
         /// #      anyhow::Ok(())
@@ -493,7 +493,7 @@ macro_rules! shared_recv_impl {
         ///
         /// ```
         /// # use std::thread::spawn;
-        /// # let (s, r) = kanal::bounded(1000);
+        /// # let (s, r) = kanal_plus::bounded(1000);
         /// # let t=spawn(move || {
         /// #   for i in 0..1000 {
         /// #     s.send(i)?;
@@ -556,7 +556,7 @@ macro_rules! shared_recv_impl {
         /// # Examples
         ///
         /// ```
-        /// let (s, r) = kanal::unbounded::<u64>();
+        /// let (s, r) = kanal_plus::unbounded::<u64>();
         /// drop(s); // drop sender and disconnect the send side from the channel
         /// assert_eq!(r.is_disconnected(),true);
         /// ```
@@ -570,7 +570,7 @@ macro_rules! shared_recv_impl {
         /// # Examples
         ///
         /// ```
-        /// let (s, r) = kanal::unbounded::<u64>();
+        /// let (s, r) = kanal_plus::unbounded::<u64>();
         /// s.send(1).unwrap();
         /// drop(s); // drop sender and disconnect the send side from the channel
         /// assert_eq!(r.is_disconnected(),true);
@@ -594,7 +594,7 @@ impl<T> Sender<T> {
     ///
     /// ```
     /// # use std::thread::spawn;
-    /// # let (s, r) = kanal::bounded(0);
+    /// # let (s, r) = kanal_plus::bounded(0);
     /// # spawn(move || {
     ///  s.send("Hello").unwrap();
     /// #      anyhow::Ok(())
@@ -660,7 +660,7 @@ impl<T> Sender<T> {
     /// ```rust
     /// use std::collections::VecDeque;
     /// // Create a bounded channel with capacity 3
-    /// let (s, r) = kanal::bounded::<i32>(3);
+    /// let (s, r) = kanal_plus::bounded::<i32>(3);
     ///
     /// // Move the sender and the buffer into a new thread that will
     /// // push as many items as the channel can accept.
@@ -756,7 +756,7 @@ impl<T> Sender<T> {
     /// ```
     /// # use std::thread::spawn;
     /// # use std::time::Duration;
-    /// # let (s, r) = kanal::bounded(0);
+    /// # let (s, r) = kanal_plus::bounded(0);
     /// # spawn(move || {
     ///  s.send_timeout("Hello",Duration::from_millis(500)).unwrap();
     /// #      anyhow::Ok(())
@@ -833,7 +833,7 @@ impl<T> Sender<T> {
     /// # tokio::runtime::Runtime::new().unwrap().block_on(async {
     /// # use tokio::{spawn as co};
     /// # use std::time::Duration;
-    ///   let (s, r) = kanal::bounded(0);
+    ///   let (s, r) = kanal_plus::bounded(0);
     ///   co(async move {
     ///     let s=s.to_async();
     ///     s.send("World").await;
@@ -856,7 +856,7 @@ impl<T> Sender<T> {
     /// # tokio::runtime::Runtime::new().unwrap().block_on(async {
     /// # use tokio::{spawn as co};
     /// # use std::time::Duration;
-    ///   let (s, r) = kanal::bounded(0);
+    ///   let (s, r) = kanal_plus::bounded(0);
     ///   co(async move {
     ///     s.as_async().send("World").await;
     ///   });
@@ -881,7 +881,7 @@ impl<T> AsyncSender<T> {
     ///
     /// ```
     /// # tokio::runtime::Runtime::new().unwrap().block_on(async {
-    /// # let (s, r) = kanal::unbounded_async();
+    /// # let (s, r) = kanal_plus::unbounded_async();
     /// s.send(1).await?;
     /// assert_eq!(r.recv().await?,1);
     /// # anyhow::Ok(())
@@ -906,7 +906,7 @@ impl<T> AsyncSender<T> {
     /// # use tokio::{spawn as co};
     /// # tokio::runtime::Runtime::new().unwrap().block_on(async {
     /// # use std::collections::VecDeque;
-    /// let (s, r) = kanal::bounded_async(3);
+    /// let (s, r) = kanal_plus::bounded_async(3);
     /// let handle = co(async move {
     ///     let mut elems = VecDeque::from(vec![10, 20, 30, 40, 50]);
     ///     // Send all elements in the deque
@@ -943,7 +943,7 @@ impl<T> AsyncSender<T> {
     ///
     /// ```
     /// # tokio::runtime::Runtime::new().unwrap().block_on(async {
-    /// let (s, r) = kanal::unbounded_async();
+    /// let (s, r) = kanal_plus::unbounded_async();
     /// let sync_sender=s.clone_sync();
     /// // JUST FOR EXAMPLE IT IS WRONG TO USE SYNC INSTANCE IN ASYNC CONTEXT
     /// sync_sender.send(1)?;
@@ -964,7 +964,7 @@ impl<T> AsyncSender<T> {
     /// ```
     /// # tokio::runtime::Runtime::new().unwrap().block_on(async {
     /// # use std::time::Duration;
-    ///   let (s, r) = kanal::bounded_async(0);
+    ///   let (s, r) = kanal_plus::bounded_async(0);
     ///   // move to sync environment
     ///   std::thread::spawn(move || {
     ///     let s=s.to_sync();
@@ -988,7 +988,7 @@ impl<T> AsyncSender<T> {
     /// ```
     /// # tokio::runtime::Runtime::new().unwrap().block_on(async {
     /// # use std::time::Duration;
-    ///   let (s, r) = kanal::bounded_async(0);
+    ///   let (s, r) = kanal_plus::bounded_async(0);
     ///   // move to sync environment
     ///   std::thread::spawn(move || {
     ///     s.as_sync().send("World")?;
@@ -1016,7 +1016,7 @@ impl<T> AsyncSender<T> {
 # Examples
 
 ```
-let (_s, receiver) = kanal::bounded::<u64>(0);
+let (_s, receiver) = kanal_plus::bounded::<u64>(0);
 let async_receiver=receiver.clone_async();
 ```
 "##
@@ -1039,7 +1039,7 @@ impl<T> fmt::Debug for Receiver<T> {
 /// # Examples
 ///
 /// ```
-/// let (_s, receiver) = kanal::bounded_async::<u64>(0);
+/// let (_s, receiver) = kanal_plus::bounded_async::<u64>(0);
 /// let sync_receiver=receiver.clone_sync();
 /// ```
 #[cfg(feature = "async")]
@@ -1180,7 +1180,7 @@ impl<T> Receiver<T> {
     ///
     /// ```
     /// # use std::thread::spawn;
-    /// # let (s, r) = kanal::bounded(100);
+    /// # let (s, r) = kanal_plus::bounded(100);
     /// # let t = spawn(move || {
     /// #   for i in 0..100 {
     /// #     s.send(i)?;
@@ -1282,7 +1282,7 @@ impl<T> Receiver<T> {
     /// # tokio::runtime::Runtime::new().unwrap().block_on(async {
     /// # use tokio::{spawn as co};
     /// # use std::time::Duration;
-    ///   let (s, r) = kanal::bounded(0);
+    ///   let (s, r) = kanal_plus::bounded(0);
     ///   co(async move {
     ///     let r=r.to_async();
     ///     let name=r.recv().await?;
@@ -1307,7 +1307,7 @@ impl<T> Receiver<T> {
     /// # tokio::runtime::Runtime::new().unwrap().block_on(async {
     /// # use tokio::{spawn as co};
     /// # use std::time::Duration;
-    ///   let (s, r) = kanal::bounded(0);
+    ///   let (s, r) = kanal_plus::bounded(0);
     ///   co(async move {
     ///     let name=r.as_async().recv().await?;
     ///     println!("Hello {}!",name);
@@ -1366,7 +1366,7 @@ impl<T> AsyncReceiver<T> {
     /// ```
     /// # tokio::runtime::Runtime::new().unwrap().block_on(async {
     /// # use tokio::{spawn as co};
-    /// # let (s, r) = kanal::bounded_async(0);
+    /// # let (s, r) = kanal_plus::bounded_async(0);
     /// # co(async move {
     /// #      s.send("Buddy").await?;
     /// #      anyhow::Ok(())
@@ -1394,7 +1394,7 @@ impl<T> AsyncReceiver<T> {
     /// // import to be able to use stream.is_terminated() function
     /// use futures::stream::FusedStream;
     ///
-    /// let (s, r) = kanal::unbounded_async();
+    /// let (s, r) = kanal_plus::unbounded_async();
     /// co(async move {
     ///     for i in 0..100 {
     ///         s.send(i).await.unwrap();
@@ -1440,7 +1440,7 @@ impl<T> AsyncReceiver<T> {
     /// ```
     /// # tokio::runtime::Runtime::new().unwrap().block_on(async {
     /// # use tokio::spawn;
-    /// let (s, r) = kanal::bounded_async(100);
+    /// let (s, r) = kanal_plus::bounded_async(100);
     /// spawn(async move {
     ///     for i in 0..100 {
     ///         s.send(i).await.unwrap();
@@ -1477,7 +1477,7 @@ impl<T> AsyncReceiver<T> {
     /// ```
     /// # tokio::runtime::Runtime::new().unwrap().block_on(async {
     /// # use tokio::{spawn as co};
-    /// let (s, r) = kanal::unbounded_async();
+    /// let (s, r) = kanal_plus::unbounded_async();
     /// s.send(1).await?;
     /// let sync_receiver=r.clone_sync();
     /// // JUST FOR EXAMPLE IT IS WRONG TO USE SYNC INSTANCE IN ASYNC CONTEXT
@@ -1498,7 +1498,7 @@ impl<T> AsyncReceiver<T> {
     /// ```
     /// # tokio::runtime::Runtime::new().unwrap().block_on(async {
     /// # use std::time::Duration;
-    ///   let (s, r) = kanal::bounded_async(0);
+    ///   let (s, r) = kanal_plus::bounded_async(0);
     ///   // move to sync environment
     ///   std::thread::spawn(move || {
     ///     let r=r.to_sync();
@@ -1521,7 +1521,7 @@ impl<T> AsyncReceiver<T> {
     /// ```
     /// # tokio::runtime::Runtime::new().unwrap().block_on(async {
     /// # use std::time::Duration;
-    ///   let (s, r) = kanal::bounded_async(0);
+    ///   let (s, r) = kanal_plus::bounded_async(0);
     ///   // move to sync environment
     ///   std::thread::spawn(move || {
     ///     let name=r.as_sync().recv()?;
@@ -1581,7 +1581,7 @@ impl<T> Clone for AsyncReceiver<T> {
 /// ```
 /// use std::thread::spawn;
 ///
-/// let (s, r) = kanal::bounded(0); // for channel with zero size queue, this channel always block until successful send/recv
+/// let (s, r) = kanal_plus::bounded(0); // for channel with zero size queue, this channel always block until successful send/recv
 ///
 /// // spawn 8 threads, that will send 100 numbers to channel reader
 /// for i in 0..8{
@@ -1621,7 +1621,7 @@ pub fn bounded<T>(size: usize) -> (Sender<T>, Receiver<T>) {
 /// # tokio::runtime::Runtime::new().unwrap().block_on(async {
 /// use tokio::{spawn as co};
 ///
-/// let (s, r) = kanal::bounded_async(0);
+/// let (s, r) = kanal_plus::bounded_async(0);
 ///
 /// co(async move {
 ///       s.send("hello!").await?;
@@ -1663,7 +1663,7 @@ const UNBOUNDED_STARTING_SIZE: usize = 32;
 /// ```
 /// use std::thread::spawn;
 ///
-/// let (s, r) = kanal::unbounded(); // for channel with unbounded size queue, this channel never blocks on send
+/// let (s, r) = kanal_plus::unbounded(); // for channel with unbounded size queue, this channel never blocks on send
 ///
 /// // spawn 8 threads, that will send 100 numbers to the channel reader
 /// for i in 0..8{
@@ -1709,7 +1709,7 @@ pub fn unbounded<T>() -> (Sender<T>, Receiver<T>) {
 /// # tokio::runtime::Runtime::new().unwrap().block_on(async {
 /// use tokio::{spawn as co};
 ///
-/// let (s, r) = kanal::unbounded_async();
+/// let (s, r) = kanal_plus::unbounded_async();
 ///
 /// co(async move {
 ///       s.send("hello!").await?;

@@ -4,7 +4,7 @@ mod utils;
 mod asyncs {
     use crate::utils::*;
     use futures_core::FusedStream;
-    use kanal::{
+    use kanal_plus::{
         bounded_async, unbounded_async, AsyncReceiver, AsyncSender, ReceiveError, SendError,
     };
     use std::{

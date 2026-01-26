@@ -1,3 +1,5 @@
+> **Note**: This is a fork of Kanal that adds `drain_blocking` (see `drain_into_blocking`) and `into_stream`. Upstream CRs are slow, so this separate crate is published as `kanal-plus` for quick validation and use.
+
 # Kanal
 
 **The fast sync and async channel that Rust deserves!**
@@ -6,12 +8,12 @@
 [![Documentation][doc-badge]][doc-url]
 [![MIT licensed][mit-badge]][mit-url]
 
-[crates-badge]: https://img.shields.io/crates/v/kanal.svg?style=for-the-badge
-[crates-url]: https://crates.io/crates/kanal
+[crates-badge]: https://img.shields.io/crates/v/kanal-plus.svg?style=for-the-badge
+[crates-url]: https://crates.io/crates/kanal-plus
 [mit-badge]: https://img.shields.io/badge/license-MIT-blue.svg?style=for-the-badge
-[mit-url]: https://github.com/fereidani/kanal/blob/master/LICENSE
-[doc-badge]: https://img.shields.io/docsrs/kanal?style=for-the-badge
-[doc-url]: https://docs.rs/kanal
+[mit-url]: https://github.com/acking-you/kanal/blob/main/LICENSE
+[doc-badge]: https://img.shields.io/docsrs/kanal-plus?style=for-the-badge
+[doc-url]: https://docs.rs/kanal-plus
 
 ## What is Kanal
 
@@ -25,18 +27,18 @@ The Kanal library is a Rust implementation of channels inspired by the CSP (Comm
 
 ## Usage
 
-To use Kanal in your Rust project, add the following line to your `Cargo.toml` file:
+To use this fork in your Rust project, add the following line to your `Cargo.toml` file:
 
 ```toml
 [dependencies]
-kanal = "0.1"
+kanal-plus = "0.2.0-beta2"
 ```
 
 Sync channel example:
 
 ```rust,ignore
 // Initialize a bounded sync channel with a capacity for 8 messages
-let (sender, receiver) = kanal::bounded(8);
+let (sender, receiver) = kanal_plus::bounded(8);
 
 let s = sender.clone();
 std::thread::spawn(move || {
@@ -61,7 +63,7 @@ Async channel example:
 
 ```rust,ignore
 // Initialize a bounded channel with a capacity for 8 messages
-let (sender, receiver) = kanal::bounded_async(8);
+let (sender, receiver) = kanal_plus::bounded_async(8);
 
 sender.send("hello").await?;
 sender.send("hello").await?;

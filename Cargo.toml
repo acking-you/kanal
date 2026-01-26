@@ -1,11 +1,11 @@
 [package]
-name = "kanal"
+name = "kanal-plus"
 version = "0.2.0-beta2"
 edition = "2021"
 authors = ["Khashayar Fereidani"]
-description = "The fast sync and async channel that Rust deserves"
-repository = "https://github.com/fereidani/kanal"
-documentation = "https://docs.rs/kanal"
+description = "Fork of kanal with extra features (drain_into_blocking, into_stream)"
+repository = "https://github.com/acking-you/kanal"
+documentation = "https://docs.rs/kanal-plus"
 keywords = ["channel", "mpsc", "mpmc", "async"]
 categories = ["concurrency", "data-structures", "asynchronous"]
 license = "MIT"
