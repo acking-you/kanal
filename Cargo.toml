@@ -1,6 +1,6 @@
 [package]
 name = "kanal-plus"
-version = "0.2.0-beta2"
+version = "0.2.0"
 edition = "2021"
 authors = ["Khashayar Fereidani"]
 description = "Fork of kanal with extra features (drain_into_blocking, into_stream)"

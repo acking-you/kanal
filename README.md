@@ -1,4 +1,4 @@
-> **Note**: This is a fork of Kanal that adds `drain_blocking` (see `drain_into_blocking`) and `into_stream`. Upstream CRs are slow, so this separate crate is published as `kanal-plus` for quick validation and use.
+> **Note**: This is a fork of Kanal that adds `drain_blocking` (see `drain_into_blocking`) and `into_stream`. I need these features right away for my own use, so I published a separate crate as `kanal-plus` for quick validation and use.
 
 # Kanal
 
@@ -31,7 +31,7 @@ To use this fork in your Rust project, add the following line to your `Cargo.tom
 
 ```toml
 [dependencies]
-kanal-plus = "0.2.0-beta2"
+kanal-plus = "0.2.0"
 ```
 
 Sync channel example:
