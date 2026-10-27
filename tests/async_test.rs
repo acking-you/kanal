@@ -771,7 +771,7 @@ mod asyncs {
     }
 
     #[test]
-    fn panicking_waker_in_batch_send_releases_the_other_receivers() {
+    fn panicking_wakers_in_batch_send_release_the_other_receivers() {
         use std::{
             future::Future,
             mem::ManuallyDrop,
@@ -784,20 +784,24 @@ mod asyncs {
         let panicking = futures::task::waker(Arc::new(PanickingWaker));
         let noop = futures::task::noop_waker();
         let mut first = pin!(rx.recv());
-        // Dropping a stranded receive future blocks forever, so `second` is
+        let mut second = pin!(rx.recv());
+        // Dropping a stranded receive future blocks forever, so `third` is
         // never dropped: a regression then fails the assertion below instead
         // of hanging the test.
-        let mut second = ManuallyDrop::new(Box::pin(rx.recv()));
-        assert!(first
-            .as_mut()
-            .poll(&mut Context::from_waker(&panicking))
-            .is_pending());
-        assert!(second
+        let mut third = ManuallyDrop::new(Box::pin(rx.recv()));
+        // Two panicking wakers: the second panics while the first unwinds,
+        // which must not abort the process.
+        for future in [first.as_mut(), second.as_mut()] {
+            assert!(future
+                .poll(&mut Context::from_waker(&panicking))
+                .is_pending());
+        }
+        assert!(third
             .as_mut()
             .poll(&mut Context::from_waker(&noop))
             .is_pending());
 
-        let mut batch = VecDeque::from([1, 2]);
+        let mut batch = VecDeque::from([1, 2, 3]);
         let sent = catch_unwind(AssertUnwindSafe(|| {
             tx.as_sync().send_many(&mut batch)
         }));
@@ -808,10 +812,14 @@ mod asyncs {
             first.as_mut().poll(&mut Context::from_waker(&noop)),
             Poll::Ready(Ok(1))
         ));
-        // The second was detached from the waitlist but never served: it must
-        // be released rather than left waiting forever.
+        // The others were detached from the waitlist but never served: they
+        // must be released rather than left waiting forever.
         assert!(matches!(
             second.as_mut().poll(&mut Context::from_waker(&noop)),
+            Poll::Ready(Err(ReceiveError()))
+        ));
+        assert!(matches!(
+            third.as_mut().poll(&mut Context::from_waker(&noop)),
             Poll::Ready(Err(ReceiveError()))
         ));
     }

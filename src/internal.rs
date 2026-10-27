@@ -456,10 +456,26 @@ impl<T> Iterator for DetachedSignals<T> {
 
 impl<T> Drop for DetachedSignals<T> {
     fn drop(&mut self) {
+        // Terminating wakes each signal's owner, and a waker may panic. This
+        // usually runs while an earlier waker's panic is already unwinding,
+        // where a second panic would abort the process, so each one is
+        // contained and every remaining signal is still terminated. Outside
+        // an unwind the first such panic is resumed once all are done.
+        let mut panic = None;
         for signal in self.0.drain(..) {
             // SAFETY: the signal was detached from the waitlist and never
             // completed, so terminating it is its one completion.
-            unsafe { signal.terminate() }
+            let terminated = std::panic::catch_unwind(
+                std::panic::AssertUnwindSafe(|| unsafe { signal.terminate() }),
+            );
+            if let Err(payload) = terminated {
+                panic.get_or_insert(payload);
+            }
+        }
+        if let Some(payload) = panic {
+            if !std::thread::panicking() {
+                std::panic::resume_unwind(payload);
+            }
         }
     }
 }
