@@ -1,6 +1,6 @@
 [package]
 name = "kanal-plus"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 # lock_api 0.5 requires Rust 1.95.
 rust-version = "1.95"
