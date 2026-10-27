@@ -569,10 +569,7 @@ macro_rules! shared_recv_impl {
             vec.reserve(required_cap);
             vec.extend(internal.queue.drain(..));
             drop(internal);
-            for p in senders {
-                // SAFETY: it's safe to receive from owned signal once
-                unsafe { vec.push(p.recv()) }
-            }
+            senders.recv_into(vec);
             Ok(required_cap)
         }
 
@@ -1363,10 +1360,7 @@ impl<T> Receiver<T> {
             vec.reserve(available);
             vec.extend(internal.queue.drain(..));
             drop(internal);
-            for p in senders {
-                // SAFETY: it's safe to receive from owned signal once
-                unsafe { vec.push(p.recv()) }
-            }
+            senders.recv_into(vec);
             return Ok(available);
         }
         if unlikely(internal.send_count == 0) {
@@ -1402,10 +1396,7 @@ impl<T> Receiver<T> {
         vec.reserve(extra);
         vec.extend(internal.queue.drain(..));
         drop(internal);
-        for p in senders {
-            // SAFETY: it's safe to receive from owned signal once
-            unsafe { vec.push(p.recv()) }
-        }
+        senders.recv_into(vec);
         Ok(1 + extra)
     }
 
