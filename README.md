@@ -1,4 +1,4 @@
-> **Note**: This is a fork of Kanal that adds `drain_blocking` (see `drain_into_blocking`) and `into_stream`. I need these features right away for my own use, so I published a separate crate as `kanal-plus` for quick validation and use.
+> **Note**: This is a fork of Kanal published as `kanal-plus`. It tracks upstream and adds `AsyncReceiver::into_stream`, a stream that owns its receiver. `drain_into_blocking` started here and is now provided by upstream Kanal.
 
 # Kanal
 
@@ -92,6 +92,7 @@ std::thread::spawn(move || {
 - Kanal provides a clean and intuitive API, making it easier to work with compared to other Rust libraries.
 - Similar to Golang, Kanal allows you to close channels using the `Close` function, enabling you to broadcast a close signal from any channel instance and close the channel for both senders and receivers.
 - Kanal includes high-performance MPMC (Multiple Producers Multiple Consumers) and SPSC (Single Producer Single Consumer) channels in a single package.
+- Kanal's concurrency protocol is model-checked with [loom](https://github.com/tokio-rs/loom): the send/receive handoff, parking and termination paths are exhaustively verified against the C11 memory model, including data-race detection on the internal signal buffers. Run the models with `RUSTFLAGS="--cfg loom" cargo test --release --lib --test loom --all-features`.
 
 ### Benchmark Results
 

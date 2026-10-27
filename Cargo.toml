@@ -1,9 +1,11 @@
 [package]
 name = "kanal-plus"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
+# lock_api 0.5 requires Rust 1.95.
+rust-version = "1.95"
 authors = ["Khashayar Fereidani"]
-description = "Fork of kanal with extra features (drain_into_blocking, into_stream)"
+description = "Fork of kanal with extra features (owned into_stream)"
 repository = "https://github.com/acking-you/kanal"
 documentation = "https://docs.rs/kanal-plus"
 keywords = ["channel", "mpsc", "mpmc", "async"]
@@ -15,7 +17,7 @@ readme = "README.md"
 branches = "0.5"
 cacheguard = "0.1"
 futures-core = { version = "0.3", optional = true }
-lock_api = "0.4"
+lock_api = "0.5"
 
 [dev-dependencies]
 anyhow = "1.0"
@@ -23,6 +25,14 @@ criterion = "0.8"
 crossbeam = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "test-util", "macros"] }
 futures = "0.3"
+
+# Model checker for concurrent code, active only with RUSTFLAGS="--cfg loom".
+# See tests/loom.rs for how to run the loom test suite.
+[target.'cfg(loom)'.dependencies]
+loom = { version = "0.7", features = ["futures"] }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(loom)"] }
 
 [features]
 async = ["futures-core"]

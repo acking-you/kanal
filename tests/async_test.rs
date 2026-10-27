@@ -1,12 +1,11 @@
+// Not compiled under loom: these tests use real threads, real time and
+// tokio; the loom models live in tests/loom.rs.
+#![cfg(not(loom))]
+
 #[cfg(feature = "async")]
 mod utils;
 #[cfg(feature = "async")]
 mod asyncs {
-    use crate::utils::*;
-    use futures_core::FusedStream;
-    use kanal_plus::{
-        bounded_async, unbounded_async, AsyncReceiver, AsyncSender, ReceiveError, SendError,
-    };
     use std::{
         collections::VecDeque,
         sync::{
@@ -15,6 +14,14 @@ mod asyncs {
         },
         time::Duration,
     };
+
+    use futures_core::FusedStream;
+    use kanal_plus::{
+        bounded_async, unbounded_async, AsyncReceiver, AsyncSender,
+        ReceiveError, SendError,
+    };
+
+    use crate::utils::*;
 
     fn new<T>(cap: Option<usize>) -> (AsyncSender<T>, AsyncReceiver<T>) {
         match cap {
@@ -458,166 +465,6 @@ mod asyncs {
         send_many(None).await;
     }
 
-    async fn drain_into_blocking(channel_size: Option<usize>) {
-        let (s, r) = new(channel_size);
-        tokio::spawn(async move {
-            let mut msgs = (0..MESSAGES).collect::<VecDeque<usize>>();
-            s.send_many(&mut msgs).await.unwrap();
-        });
-
-        let mut vec = Vec::new();
-        let mut total = 0;
-        while total < MESSAGES {
-            let count = r.drain_into_blocking(&mut vec).await.unwrap();
-            assert!(count > 0);
-            total += count;
-        }
-        assert_eq!(vec.len(), MESSAGES);
-        for (i, v) in vec.iter().enumerate() {
-            assert_eq!(*v, i);
-        }
-    }
-
-    #[tokio::test]
-    async fn drain_into_blocking_0() {
-        drain_into_blocking(Some(0)).await;
-    }
-
-    #[tokio::test]
-    async fn drain_into_blocking_1() {
-        drain_into_blocking(Some(1)).await;
-    }
-
-    #[tokio::test]
-    async fn drain_into_blocking_u() {
-        drain_into_blocking(None).await;
-    }
-
-    // Test that drain_into_blocking actually awaits when no data is available
-    async fn drain_into_blocking_waits(channel_size: Option<usize>) {
-        use std::sync::atomic::{AtomicBool, Ordering};
-        use std::sync::Arc;
-
-        let (s, r) = new(channel_size);
-        let received = Arc::new(AtomicBool::new(false));
-        let received_clone = received.clone();
-
-        // Spawn receiver task that will await for data
-        let handle = tokio::spawn(async move {
-            let mut vec = Vec::new();
-            let count = r.drain_into_blocking(&mut vec).await.unwrap();
-            received_clone.store(true, Ordering::SeqCst);
-            assert!(count > 0);
-            vec
-        });
-
-        // Give receiver time to start awaiting
-        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-
-        // Receiver should still be awaiting (no data sent yet)
-        assert!(
-            !received.load(Ordering::SeqCst),
-            "receiver should be awaiting"
-        );
-
-        // Now send data
-        s.send(42usize).await.unwrap();
-
-        // Wait for receiver to complete
-        let vec = handle.await.unwrap();
-        assert!(
-            received.load(Ordering::SeqCst),
-            "receiver should have received"
-        );
-        assert_eq!(vec, vec![42]);
-    }
-
-    #[tokio::test]
-    async fn drain_into_blocking_waits_0() {
-        drain_into_blocking_waits(Some(0)).await;
-    }
-
-    #[tokio::test]
-    async fn drain_into_blocking_waits_1() {
-        drain_into_blocking_waits(Some(1)).await;
-    }
-
-    #[tokio::test]
-    async fn drain_into_blocking_waits_u() {
-        drain_into_blocking_waits(None).await;
-    }
-
-    // Test drain_into_blocking with multiple concurrent senders
-    async fn drain_into_blocking_mpsc(channel_size: Option<usize>) {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        use std::sync::Arc;
-
-        const NUM_SENDERS: usize = 10;
-        const MSGS_PER_SENDER: usize = 100;
-        const TOTAL_MSGS: usize = NUM_SENDERS * MSGS_PER_SENDER;
-
-        let (s, r) = new(channel_size);
-        let sent_count = Arc::new(AtomicUsize::new(0));
-
-        // Spawn multiple sender tasks
-        let handles: Vec<_> = (0..NUM_SENDERS)
-            .map(|sender_id| {
-                let s = s.clone();
-                let sent_count = sent_count.clone();
-                tokio::spawn(async move {
-                    for i in 0..MSGS_PER_SENDER {
-                        s.send(sender_id * MSGS_PER_SENDER + i).await.unwrap();
-                        sent_count.fetch_add(1, Ordering::SeqCst);
-                    }
-                })
-            })
-            .collect();
-
-        drop(s); // Drop original sender
-
-        // Receiver uses drain_into_blocking to collect all messages
-        let mut vec = Vec::new();
-        loop {
-            match r.drain_into_blocking(&mut vec).await {
-                Ok(count) => {
-                    assert!(count > 0);
-                    if vec.len() >= TOTAL_MSGS {
-                        break;
-                    }
-                }
-                Err(_) => break, // Channel closed
-            }
-        }
-
-        // Wait for all senders to complete
-        for h in handles {
-            h.await.unwrap();
-        }
-
-        assert_eq!(vec.len(), TOTAL_MSGS);
-
-        // Verify all messages received (order may vary due to concurrency)
-        vec.sort();
-        for (i, v) in vec.iter().enumerate() {
-            assert_eq!(*v, i);
-        }
-    }
-
-    #[tokio::test]
-    async fn drain_into_blocking_mpsc_0() {
-        drain_into_blocking_mpsc(Some(0)).await;
-    }
-
-    #[tokio::test]
-    async fn drain_into_blocking_mpsc_1() {
-        drain_into_blocking_mpsc(Some(1)).await;
-    }
-
-    #[tokio::test]
-    async fn drain_into_blocking_mpsc_u() {
-        drain_into_blocking_mpsc(None).await;
-    }
-
     #[tokio::test]
     async fn one_msg() {
         let (s, r) = bounded_async::<u8>(1);
@@ -718,37 +565,16 @@ mod asyncs {
         assert_eq!(stream.next().await, None);
     }
 
+    // The owned stream must cancel its registered receive before the
+    // receiver it borrows is dropped, and dropping it closes the channel.
     #[tokio::test]
-    async fn stream_owned() {
-        use futures::stream::StreamExt;
-        let (s, r) = new(Some(0));
-        tokio::spawn(async move {
-            for i in 0..MESSAGES {
-                s.send(i).await.unwrap();
-            }
-        });
+    async fn stream_owned_drop_with_pending_receive() {
+        use futures::{poll, stream::StreamExt};
+        let (s, r) = bounded_async::<u8>(0);
         let mut stream = r.into_stream();
-
-        assert!(!stream.is_terminated());
-        for i in 0..MESSAGES {
-            assert_eq!(stream.next().await.unwrap(), i);
-        }
-        assert_eq!(stream.next().await, None);
-        assert!(stream.is_terminated());
-        assert_eq!(stream.next().await, None);
-    }
-
-    #[tokio::test]
-    async fn stream_owned_drop_closes() {
-        use futures::stream::StreamExt;
-        let (s, r) = bounded_async::<u8>(1);
-        let mut stream = r.into_stream();
-
-        s.send(1).await.unwrap();
-        assert_eq!(stream.next().await, Some(1));
-
+        assert!(poll!(stream.next()).is_pending());
         drop(stream);
-        assert!(s.send(2).await.is_err());
+        assert!(s.send(1).await.is_err());
     }
 
     async fn two_msg(size: usize) {
@@ -777,5 +603,161 @@ mod asyncs {
         for _ in 0..MESSAGES {
             rx.recv().await.unwrap();
         }
+    }
+
+    // Regression test for a spurious early-termination bug in the async receive
+    // future's "signal already shared" fallback. When the future was re-polled
+    // while pending with a changed waker and the peer had already taken the
+    // signal out of the wait list, the code used to set the signal state to
+    // Done before calling blocking_wait(). Because Done is greater than
+    // LOCKED_STARVATION, blocking_wait() returned false immediately and the
+    // receiver reported a spurious error. Under stream().buffer_unordered()
+    // with a yield this race fires continuously, ending the stream early
+    // and deadlocking the synchronous producer on the next rendezvous.
+    //
+    // The race is timing dependent and is reliably triggered only under release
+    // optimizations (the original bug report was release-only); the test never
+    // produces a false failure, so running it in debug is harmless even though
+    // it may not reproduce the race there.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn stream_buffer_unordered_rendezvous_integrity() {
+        use futures::StreamExt;
+
+        #[derive(Debug)]
+        struct Payload {
+            id: u64,
+            values: Vec<u64>,
+        }
+
+        // Miri's isolated clock advances with executed work rather than real
+        // time, so the native item count can never finish inside any
+        // real-time timeout there (observed: ~750 items burn the whole 30s
+        // budget while progressing normally). A reduced count still
+        // exercises the same handoff interleavings under Miri's scheduler
+        // and still catches the protocol UB this test guards against.
+        #[cfg(not(miri))]
+        const N: u64 = 10_000;
+        #[cfg(miri)]
+        const N: u64 = 128;
+
+        let (async_sender, receiver) = bounded_async::<Payload>(0);
+        // Drive the producer from a synchronous sender on a dedicated thread,
+        // then drop the async sender so only the sync producer remains.
+        let sender = async_sender.as_sync().clone();
+        drop(async_sender);
+
+        let producer = std::thread::spawn(move || {
+            for id in 0..N {
+                sender
+                    .send(Payload {
+                        id,
+                        values: vec![id; 16],
+                    })
+                    .unwrap();
+            }
+        });
+
+        // A regression either ends the stream early (fewer than N items) or
+        // deadlocks the rendezvous; the timeout makes both fail fast instead of
+        // hanging the test runner. Under Miri the budget is virtual time, so a
+        // generous value costs nothing on a passing run.
+        let timeout = Duration::from_secs(if cfg!(miri) { 600 } else { 30 });
+        let count = tokio::time::timeout(timeout, async {
+            receiver
+                .stream()
+                .map(|payload| async move {
+                    tokio::task::yield_now().await;
+                    assert!(
+                        payload.values.iter().all(|value| *value == payload.id),
+                        "corrupted payload: {payload:?}"
+                    );
+                })
+                .buffer_unordered(2)
+                .count()
+                .await
+        })
+        .await
+        .expect("stream did not finish within timeout (deadlock regression?)");
+
+        assert_eq!(count, N as usize, "stream ended early; lost messages");
+
+        producer.join().expect("producer thread panicked");
+    }
+
+    // drain_into_blocking on the async receiver returns a DrainIntoFuture:
+    // it must never block the runtime thread, resolve with everything
+    // available in one batch, and otherwise wait for the first delivery.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn drain_into_blocking_batches_messages() {
+        const COUNT: usize = if cfg!(miri) { 64 } else { 10_000 };
+        let (s, r) = new::<usize>(Some(16));
+
+        let producer = tokio::spawn(async move {
+            for i in 0..COUNT {
+                s.send(i).await.unwrap();
+            }
+        });
+
+        let mut buf = Vec::new();
+        while buf.len() < COUNT {
+            assert!(r.drain_into_blocking(&mut buf).await.unwrap() >= 1);
+        }
+        assert_eq!(buf.len(), COUNT);
+        for (i, v) in buf.iter().enumerate() {
+            assert_eq!(*v, i);
+        }
+        producer.await.unwrap();
+    }
+
+    // On a rendezvous channel every message goes through the
+    // registered-signal path of DrainIntoFuture plus its opportunistic
+    // second batch pass.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn drain_into_blocking_rendezvous() {
+        const COUNT: usize = if cfg!(miri) { 64 } else { 1_000 };
+        let (s, r) = new::<usize>(Some(0));
+
+        let producer = tokio::spawn(async move {
+            for i in 0..COUNT {
+                s.send(i).await.unwrap();
+            }
+        });
+
+        let mut buf = Vec::new();
+        while buf.len() < COUNT {
+            assert!(r.drain_into_blocking(&mut buf).await.unwrap() >= 1);
+        }
+        for (i, v) in buf.iter().enumerate() {
+            assert_eq!(*v, i);
+        }
+        producer.await.unwrap();
+    }
+
+    // The shared non-blocking drain_into remains available on the async
+    // receiver and never waits.
+    #[tokio::test]
+    async fn drain_into_non_blocking_on_async_receiver() {
+        let (s, r) = new::<usize>(Some(8));
+        let mut buf = Vec::new();
+        // nothing available: returns immediately with zero
+        assert_eq!(r.drain_into(&mut buf).unwrap(), 0);
+        for i in 0..4 {
+            s.send(i).await.unwrap();
+        }
+        assert_eq!(r.drain_into(&mut buf).unwrap(), 4);
+        assert_eq!(buf, vec![0, 1, 2, 3]);
+    }
+
+    #[tokio::test]
+    async fn drain_into_blocking_terminated_errors() {
+        let (s, r) = new::<usize>(Some(4));
+        s.send(0).await.unwrap();
+        drop(s);
+        let mut buf = Vec::new();
+        // queued data is still drained after the sender is gone
+        assert_eq!(r.drain_into_blocking(&mut buf).await.unwrap(), 1);
+        // now the channel is terminated
+        assert!(r.drain_into_blocking(&mut buf).await.is_err());
+        assert_eq!(buf, vec![0]);
     }
 }

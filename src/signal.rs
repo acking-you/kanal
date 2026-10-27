@@ -1,20 +1,27 @@
-use crate::{backoff, pointer::KanalPtr};
-use core::{
-    cell::UnsafeCell,
-    fmt::Debug,
-    mem::ManuallyDrop,
-    sync::atomic::{fence, AtomicUsize, Ordering},
-    time::Duration,
-};
+use core::mem::ManuallyDrop;
+#[cfg(not(loom))]
+use core::time::Duration;
 #[cfg(feature = "async")]
-use core::{mem::MaybeUninit, task::Waker};
-use std::{
-    thread::{current as current_thread, Thread},
-    time::Instant,
-};
+use core::{fmt::Debug, mem::MaybeUninit, task::Waker};
+use std::time::Instant;
 
-use branches::{likely, unlikely};
+#[cfg(not(loom))]
+use branches::likely;
+use branches::unlikely;
 use cacheguard::CacheGuard;
+
+#[cfg(not(loom))]
+use crate::backoff;
+#[cfg(not(loom))]
+use crate::primitives::park_timeout;
+#[cfg(all(loom, feature = "async"))]
+use crate::primitives::yield_now;
+use crate::{
+    pointer::KanalPtr,
+    primitives::{
+        current_thread, fence, park, AtomicUsize, Ordering, Thread, UnsafeCell,
+    },
+};
 
 const UNINIT: usize = 0;
 const LOCKED: usize = UNINIT + 1;
@@ -40,6 +47,31 @@ fn untag_pointer<T>(ptr: *const ()) -> (*const T, bool) {
     let is_tagged = (ptr.addr() & 1) == 1;
     let untagged = ptr.map_addr(|addr| addr & !1).cast::<T>();
     (untagged, is_tagged)
+}
+
+/// Deferred wakeup of a signal counterpart. Produced by the `*_deferred`
+/// signal operations while the channel lock is held; must be consumed with
+/// [`DeferredNotify::notify`] after the lock is released, otherwise a parked
+/// or suspended counterpart may never wake.
+#[must_use = "dropping this without calling notify may leave the counterpart parked forever"]
+pub(crate) enum DeferredNotify {
+    None,
+    Unpark(Thread),
+    #[cfg(feature = "async")]
+    Wake(Waker),
+}
+
+impl DeferredNotify {
+    /// Performs the deferred unpark/wake.
+    #[inline(always)]
+    pub(crate) fn notify(self) {
+        match self {
+            DeferredNotify::None => (),
+            DeferredNotify::Unpark(thread) => thread.unpark(),
+            #[cfg(feature = "async")]
+            DeferredNotify::Wake(waker) => waker.wake(),
+        }
+    }
 }
 
 #[repr(C)]
@@ -101,10 +133,23 @@ impl<T> DynamicSignal<T> {
     }
     #[inline(always)]
     pub(crate) unsafe fn recv(self) -> T {
+        let (data, notify) = self.recv_deferred();
+        notify.notify();
+        data
+    }
+    /// Receives the data but defers the counterpart's unpark/wake to the
+    /// returned notifier, so callers holding the channel lock can release
+    /// it before notifying.
+    #[inline(always)]
+    pub(crate) unsafe fn recv_deferred(self) -> (T, DeferredNotify) {
         match self.resolve() {
-            PointerResult::Sync(ptr) => unsafe { SyncSignal::read_data(ptr) },
+            PointerResult::Sync(ptr) => unsafe {
+                SyncSignal::read_data_deferred(ptr)
+            },
             #[cfg(feature = "async")]
-            PointerResult::Async(ptr) => unsafe { AsyncSignal::read_data(ptr) },
+            PointerResult::Async(ptr) => unsafe {
+                AsyncSignal::read_data_deferred(ptr)
+            },
         }
     }
     #[inline(always)]
@@ -159,22 +204,33 @@ impl<T> SyncSignal<T> {
     }
     #[inline(always)]
     pub(crate) unsafe fn write_data(this: *const Self, data: T) {
-        let thread = ManuallyDrop::take(&mut *(*this).thread.get());
+        let thread = (*this)
+            .thread
+            .with_mut(|t| unsafe { ManuallyDrop::take(&mut *t) });
         unsafe {
             (*this).ptr.write(data);
         }
-        if unlikely((*this).state.swap(UNLOCKED, Ordering::AcqRel) == LOCKED_STARVATION) {
+        if unlikely(
+            (*this).state.swap(UNLOCKED, Ordering::AcqRel) == LOCKED_STARVATION,
+        ) {
             thread.unpark();
         }
     }
     #[inline(always)]
-    pub(crate) unsafe fn read_data(this: *const Self) -> T {
-        let thread = ManuallyDrop::take(&mut *(*this).thread.get());
+    pub(crate) unsafe fn read_data_deferred(
+        this: *const Self,
+    ) -> (T, DeferredNotify) {
+        let thread = (*this)
+            .thread
+            .with_mut(|t| unsafe { ManuallyDrop::take(&mut *t) });
         let r = (*this).ptr.read();
-        if unlikely((*this).state.swap(UNLOCKED, Ordering::AcqRel) == LOCKED_STARVATION) {
-            thread.unpark();
+        if unlikely(
+            (*this).state.swap(UNLOCKED, Ordering::AcqRel) == LOCKED_STARVATION,
+        ) {
+            (r, DeferredNotify::Unpark(thread))
+        } else {
+            (r, DeferredNotify::None)
         }
-        r
     }
     pub(crate) fn is_terminated(&self) -> bool {
         self.state.load(Ordering::Acquire) == TERMINATED
@@ -183,14 +239,22 @@ impl<T> SyncSignal<T> {
         self.ptr.read()
     }
     pub(crate) unsafe fn terminate(this: *const Self) {
-        let thread = ManuallyDrop::take(&mut *(*this).thread.get());
-        if unlikely((*this).state.swap(TERMINATED, Ordering::AcqRel) == LOCKED_STARVATION) {
+        let thread = (*this)
+            .thread
+            .with_mut(|t| unsafe { ManuallyDrop::take(&mut *t) });
+        if unlikely(
+            (*this).state.swap(TERMINATED, Ordering::AcqRel)
+                == LOCKED_STARVATION,
+        ) {
             thread.unpark();
         }
     }
     pub(crate) unsafe fn cancel(this: *const Self) {
-        let _ = ManuallyDrop::take(&mut *(*this).thread.get());
+        let _ = (*this)
+            .thread
+            .with_mut(|t| unsafe { ManuallyDrop::take(&mut *t) });
     }
+    #[cfg(not(loom))]
     #[inline(always)]
     pub(crate) fn wait(&self) -> bool {
         let v = self.state.load(Ordering::Relaxed);
@@ -199,7 +263,8 @@ impl<T> SyncSignal<T> {
             return v == UNLOCKED;
         }
         let now = Instant::now();
-        let spin_timeout = now.checked_add(Duration::from_micros(25)).unwrap_or(now);
+        let spin_timeout =
+            now.checked_add(Duration::from_micros(25)).unwrap_or(now);
         // 25 microseconds or 256 os yields, whichever happens first
         for _ in 0..4 {
             for _ in 0..64 {
@@ -221,7 +286,7 @@ impl<T> SyncSignal<T> {
             Ordering::Acquire,
         ) {
             Ok(_) => loop {
-                std::thread::park();
+                park();
                 let v = self.state.load(Ordering::Relaxed);
                 if likely(v > LOCKED_STARVATION) {
                     fence(Ordering::Acquire);
@@ -231,7 +296,36 @@ impl<T> SyncSignal<T> {
             Err(v) => v == UNLOCKED,
         }
     }
+    /// Loom variant of [`Self::wait`]: skips the timed spinning phase (loom
+    /// does not model time and yields would only blow up the state space)
+    /// and goes straight to the parking protocol, which is the part loom
+    /// can meaningfully verify.
+    #[cfg(loom)]
+    pub(crate) fn wait(&self) -> bool {
+        let v = self.state.load(Ordering::Relaxed);
+        if v > LOCKED_STARVATION {
+            fence(Ordering::Acquire);
+            return v == UNLOCKED;
+        }
+        match self.state.compare_exchange(
+            LOCKED,
+            LOCKED_STARVATION,
+            Ordering::Release,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => loop {
+                park();
+                let v = self.state.load(Ordering::Relaxed);
+                if v > LOCKED_STARVATION {
+                    fence(Ordering::Acquire);
+                    return v == UNLOCKED;
+                }
+            },
+            Err(v) => v == UNLOCKED,
+        }
+    }
     /// Waits for the signal event in sync mode with a timeout
+    #[cfg(not(loom))]
     pub(crate) fn wait_timeout(&self, until: Instant) -> bool {
         let v = self.state.load(Ordering::Relaxed);
         if likely(v > LOCKED_STARVATION) {
@@ -254,21 +348,33 @@ impl<T> SyncSignal<T> {
                 if now >= until {
                     return self.state.load(Ordering::Acquire) == UNLOCKED;
                 }
-                std::thread::park_timeout(until - now);
+                park_timeout(until - now);
             },
             Err(v) => v == UNLOCKED,
         }
     }
+    /// Loom variant of [`Self::wait_timeout`]: loom does not model time, so
+    /// the timeout never fires and this waits like [`Self::wait`]. Loom
+    /// models must not rely on the timeout-based APIs elapsing.
+    #[cfg(loom)]
+    pub(crate) fn wait_timeout(&self, _until: Instant) -> bool {
+        self.wait()
+    }
 }
 
+// Unlike SyncSignal, the state is deliberately not cache-line padded: the
+// signal is embedded in every Send/Receive future, where padding would grow
+// and over-align each containing future and task allocation, while both
+// sides touch state, data and waker within a single handoff anyway.
 #[cfg(feature = "async")]
 pub(crate) struct AsyncSignal<T> {
-    state: CacheGuard<AtomicUsize>,
+    state: AtomicUsize,
     data: UnsafeCell<MaybeUninit<T>>,
     waker: UnsafeCell<Waker>,
     _pinned: core::marker::PhantomPinned,
 }
 
+#[cfg(feature = "async")]
 impl<T> Debug for AsyncSignal<T> {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         f.debug_struct("AsyncSignal")
@@ -288,7 +394,8 @@ const fn no_op_waker() -> Waker {
     const unsafe fn wake_by_ref(_: *const ()) {}
     const unsafe fn drop(_: *const ()) {}
 
-    static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, wake, wake_by_ref, drop);
+    static VTABLE: RawWakerVTable =
+        RawWakerVTable::new(clone, wake, wake_by_ref, drop);
     const unsafe fn raw_waker() -> RawWaker {
         RawWaker::new(core::ptr::null(), &VTABLE)
     }
@@ -301,11 +408,11 @@ use crate::future::FutureState;
 #[cfg(feature = "async")]
 impl<T> AsyncSignal<T> {
     #[inline(always)]
-    pub(crate) const fn new_recv() -> Self {
+    pub(crate) fn new_recv() -> Self {
         Self {
-            state: CacheGuard::new(AtomicUsize::new(Self::state_to_usize(
+            state: AtomicUsize::new(Self::state_to_usize(
                 FutureState::Unregistered,
-            ))),
+            )),
             data: UnsafeCell::new(MaybeUninit::uninit()),
             waker: UnsafeCell::new(no_op_waker()),
             _pinned: core::marker::PhantomPinned,
@@ -313,11 +420,11 @@ impl<T> AsyncSignal<T> {
     }
 
     #[inline(always)]
-    pub(crate) const fn new_send(data: T) -> Self {
+    pub(crate) fn new_send(data: T) -> Self {
         Self {
-            state: CacheGuard::new(AtomicUsize::new(Self::state_to_usize(
+            state: AtomicUsize::new(Self::state_to_usize(
                 FutureState::Unregistered,
-            ))),
+            )),
             data: UnsafeCell::new(MaybeUninit::new(data)),
             waker: UnsafeCell::new(no_op_waker()),
             _pinned: core::marker::PhantomPinned,
@@ -327,7 +434,9 @@ impl<T> AsyncSignal<T> {
     /// SAFETY: caller must guarantee this signal is already finished and is not
     /// shared in any wait queue
     pub(crate) unsafe fn reset_send(&mut self, data: T) {
-        self.data.get_mut().write(data);
+        self.data.with_mut(|d| unsafe {
+            (*d).write(data);
+        });
         self.state.store(
             Self::state_to_usize(FutureState::Pending),
             Ordering::Release,
@@ -335,9 +444,9 @@ impl<T> AsyncSignal<T> {
     }
 
     #[inline(always)]
-    pub(crate) const fn new_send_finished() -> Self {
+    pub(crate) fn new_send_finished() -> Self {
         Self {
-            state: CacheGuard::new(AtomicUsize::new(Self::state_to_usize(FutureState::Success))),
+            state: AtomicUsize::new(Self::state_to_usize(FutureState::Success)),
             data: UnsafeCell::new(MaybeUninit::uninit()),
             waker: UnsafeCell::new(no_op_waker()),
             _pinned: core::marker::PhantomPinned,
@@ -411,40 +520,43 @@ impl<T> AsyncSignal<T> {
 
     #[inline(always)]
     pub(crate) unsafe fn will_wake(&self, waker: &Waker) -> bool {
-        (&*self.waker.get()).will_wake(waker)
+        self.waker.with(|w| unsafe { (*w).will_wake(waker) })
     }
-    // SAFETY: this function is only safe when owner of signal have exclusive lock
-    // over channel,  this avoids another reader to clone the waker while we are
-    // updating it.  this function should not be called if signal is
-    // uninitialized or already shared.
+    // SAFETY: this function is only safe when owner of signal have exclusive
+    // lock over channel,  this avoids another reader to clone the waker
+    // while we are updating it.  this function should not be called if
+    // signal is uninitialized or already shared.
     #[inline(always)]
     pub(crate) unsafe fn update_waker(&self, waker: &Waker) {
-        *self.waker.get() = waker.clone();
+        self.waker.with_mut(|w| unsafe { *w = waker.clone() });
     }
     #[inline(always)]
     pub(crate) unsafe fn clone_waker(&self) -> Waker {
-        (&*self.waker.get()).clone()
+        self.waker.with(|w| unsafe { (*w).clone() })
     }
     #[inline(always)]
     pub(crate) unsafe fn write_data(this: *const Self, data: T) {
         let waker = (*this).clone_waker();
-        (*this).data.get().write(MaybeUninit::new(data));
+        (*this)
+            .data
+            .with_mut(|d| unsafe { d.write(MaybeUninit::new(data)) });
         (*this).state.store(UNLOCKED, Ordering::Release);
         waker.wake();
     }
     #[inline(always)]
-    pub(crate) unsafe fn read_data(this: *const Self) -> T {
+    pub(crate) unsafe fn read_data_deferred(
+        this: *const Self,
+    ) -> (T, DeferredNotify) {
         let waker = (*this).clone_waker();
-        let data = (*this).data.get().read().assume_init();
+        let data = (*this).data.with(|d| unsafe { d.read().assume_init() });
         (*this).state.store(UNLOCKED, Ordering::Release);
-        waker.wake();
-        data
+        (data, DeferredNotify::Wake(waker))
     }
 
     // Drops waker without waking
     pub(crate) unsafe fn cancel(_this: *const Self) {}
     pub(crate) unsafe fn assume_init(&self) -> T {
-        unsafe { self.data.get().read().assume_init() }
+        self.data.with(|d| unsafe { d.read().assume_init() })
     }
     pub(crate) unsafe fn terminate(this: *const Self) {
         let waker = (*this).clone_waker();
@@ -453,9 +565,11 @@ impl<T> AsyncSignal<T> {
     }
     #[inline(always)]
     pub(crate) unsafe fn drop_data(&mut self) {
-        let ptr = self.data.get();
-        (&mut *ptr).as_mut_ptr().drop_in_place();
+        self.data.with_mut(|d| unsafe {
+            (*d).as_mut_ptr().drop_in_place();
+        });
     }
+    #[cfg(not(loom))]
     #[inline(never)]
     #[cold]
     pub(crate) fn blocking_wait(&self) -> bool {
@@ -487,6 +601,19 @@ impl<T> AsyncSignal<T> {
             if sleep_time < (1 << 18) {
                 sleep_time <<= 1;
             }
+        }
+    }
+    /// Loom variant of [`Self::blocking_wait`]: a plain yield loop, as loom
+    /// neither models time-based sleeping nor benefits from backoff.
+    #[cfg(loom)]
+    pub(crate) fn blocking_wait(&self) -> bool {
+        loop {
+            let v = self.state.load(Ordering::Relaxed);
+            if v > LOCKED_STARVATION {
+                fence(Ordering::Acquire);
+                return v == UNLOCKED;
+            }
+            yield_now();
         }
     }
 }
