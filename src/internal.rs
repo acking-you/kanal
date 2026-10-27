@@ -234,47 +234,46 @@ impl<T> ChannelInternal<T> {
     }
 
     /// Removes up to `max` waiting receive signals from the waitlist and
-    /// returns them. The caller owns the returned signals and must complete
-    /// every one of them; completing them after releasing the channel lock
-    /// is safe because detached signals can no longer be canceled. Like
+    /// returns them. The caller owns the returned signals and completes them
+    /// after releasing the channel lock, which is safe because detached
+    /// signals can no longer be canceled; any it does not complete are
+    /// terminated when [`DetachedSignals`] drops. Like
     /// [`Self::next_recv`], an exhausted waitlist lazily flips over to the
     /// send side.
     #[inline(always)]
-    pub(crate) fn take_recvs(
-        &mut self,
-        max: usize,
-    ) -> VecDeque<DynamicSignal<T>> {
+    pub(crate) fn take_recvs(&mut self, max: usize) -> DetachedSignals<T> {
         if !self.recv_blocking {
-            return VecDeque::new();
+            return DetachedSignals::default();
         }
         if self.wait_list.is_empty() {
             self.recv_blocking = false;
-            return VecDeque::new();
+            return DetachedSignals::default();
         }
-        if max >= self.wait_list.len() {
+        DetachedSignals(if max >= self.wait_list.len() {
             core::mem::take(&mut self.wait_list)
         } else {
             let tail = self.wait_list.split_off(max);
             core::mem::replace(&mut self.wait_list, tail)
-        }
+        })
     }
 
     /// Removes all waiting send signals from the waitlist and returns them.
-    /// The caller owns the returned signals and must complete every one of
-    /// them; completing them after releasing the channel lock is safe
-    /// because detached signals can no longer be canceled. Like
+    /// The caller owns the returned signals and completes them after
+    /// releasing the channel lock, which is safe because detached signals can
+    /// no longer be canceled; any it does not complete are terminated when
+    /// [`DetachedSignals`] drops. Like
     /// [`Self::next_send`], an exhausted waitlist lazily flips over to the
     /// receive side.
     #[inline(always)]
-    pub(crate) fn take_sends(&mut self) -> VecDeque<DynamicSignal<T>> {
+    pub(crate) fn take_sends(&mut self) -> DetachedSignals<T> {
         if self.recv_blocking {
-            return VecDeque::new();
+            return DetachedSignals::default();
         }
         if self.wait_list.is_empty() {
             self.recv_blocking = true;
-            return VecDeque::new();
+            return DetachedSignals::default();
         }
-        core::mem::take(&mut self.wait_list)
+        DetachedSignals(core::mem::take(&mut self.wait_list))
     }
 
     /// Adds new sender/receiver signal to the waitlist
@@ -403,5 +402,80 @@ impl<T> ChannelInternal<T> {
         }
         self.ref_count -= 1;
         (self.ref_count == 0, cleanup)
+    }
+}
+
+/// Signals detached from the waitlist by [`Internal::take_recvs`] or
+/// [`Internal::take_sends`], to be completed one by one through the iterator.
+///
+/// Their owners can no longer cancel them, so every signal must be completed.
+/// Any the caller does not reach, because a waker panicked while an earlier
+/// one was being completed, are terminated on drop instead of being left to
+/// wait forever.
+pub(crate) struct DetachedSignals<T>(VecDeque<DynamicSignal<T>>);
+
+impl<T> DetachedSignals<T> {
+    #[inline(always)]
+    pub(crate) fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    #[inline(always)]
+    pub(crate) fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Receives from every detached send signal into `vec`. Each message is
+    /// stored before its sender is woken, so a panicking waker cannot lose it.
+    #[inline(always)]
+    pub(crate) fn recv_into(self, vec: &mut alloc::vec::Vec<T>) {
+        for signal in self {
+            // SAFETY: a detached send signal is received from exactly once
+            let (data, notify) = unsafe { signal.recv_deferred() };
+            vec.push(data);
+            notify.notify();
+        }
+    }
+}
+
+impl<T> Default for DetachedSignals<T> {
+    #[inline(always)]
+    fn default() -> Self {
+        Self(VecDeque::new())
+    }
+}
+
+impl<T> Iterator for DetachedSignals<T> {
+    type Item = DynamicSignal<T>;
+
+    #[inline(always)]
+    fn next(&mut self) -> Option<DynamicSignal<T>> {
+        self.0.pop_front()
+    }
+}
+
+impl<T> Drop for DetachedSignals<T> {
+    fn drop(&mut self) {
+        // Terminating wakes each signal's owner, and a waker may panic. This
+        // usually runs while an earlier waker's panic is already unwinding,
+        // where a second panic would abort the process, so each one is
+        // contained and every remaining signal is still terminated. Outside
+        // an unwind the first such panic is resumed once all are done.
+        let mut panic = None;
+        for signal in self.0.drain(..) {
+            // SAFETY: the signal was detached from the waitlist and never
+            // completed, so terminating it is its one completion.
+            let terminated = std::panic::catch_unwind(
+                std::panic::AssertUnwindSafe(|| unsafe { signal.terminate() }),
+            );
+            if let Err(payload) = terminated {
+                panic.get_or_insert(payload);
+            }
+        }
+        if let Some(payload) = panic {
+            if !std::thread::panicking() {
+                std::panic::resume_unwind(payload);
+            }
+        }
     }
 }

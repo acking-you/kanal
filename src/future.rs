@@ -594,10 +594,7 @@ impl<'a, 'b, T> DrainIntoFuture<'a, 'b, T> {
         self.vec.reserve(available);
         self.vec.extend(internal.queue.drain(..));
         drop(internal);
-        for p in senders {
-            // SAFETY: it's safe to receive from owned signal once
-            unsafe { self.vec.push(p.recv()) }
-        }
+        senders.recv_into(self.vec);
         available
     }
 }
@@ -654,11 +651,7 @@ impl<T> Future for DrainIntoFuture<'_, '_, T> {
                     this.vec.extend(internal.queue.drain(..));
                     drop(internal);
                     this.sig.set_state_relaxed(FutureState::Done);
-                    for p in senders {
-                        // SAFETY: it's safe to receive from owned signal
-                        // once
-                        unsafe { this.vec.push(p.recv()) }
-                    }
+                    senders.recv_into(this.vec);
                     return Poll::Ready(Ok(available));
                 }
                 if unlikely(internal.send_count == 0) {
@@ -679,14 +672,17 @@ impl<T> Future for DrainIntoFuture<'_, '_, T> {
                 Poll::Pending
             }
             FutureState::Success => {
-                // one message was delivered directly into the signal
+                // one message was delivered directly into the signal. Mark it
+                // consumed before moving it out: draining below wakes other
+                // senders, and if a waker panics, Drop must not read the
+                // payload a second time.
+                this.sig.set_state_relaxed(FutureState::Done);
                 // SAFETY: data is received and safe to read
                 this.vec.push(unsafe { this.sig.assume_init() });
                 // batch whatever else arrived while waking up; the closed
                 // checks are deliberately skipped as one message is already
                 // owned and a closed channel simply yields nothing extra
                 let extra = this.drain_available();
-                this.sig.set_state_relaxed(FutureState::Done);
                 Poll::Ready(Ok(1 + extra))
             }
             FutureState::Pending => {
@@ -716,11 +712,12 @@ impl<T> Future for DrainIntoFuture<'_, '_, T> {
                         // immediately and report a spurious error.
                         let delivered = this.sig.blocking_wait();
                         if delivered {
+                            // Consumed before moving out, as in `Success`.
+                            this.sig.set_state_relaxed(FutureState::Done);
                             // SAFETY: the sender wrote the data, it is safe
                             // to read
                             this.vec.push(unsafe { this.sig.assume_init() });
                             let extra = this.drain_available();
-                            this.sig.set_state_relaxed(FutureState::Done);
                             Poll::Ready(Ok(1 + extra))
                         } else {
                             this.sig.set_state_relaxed(FutureState::Done);

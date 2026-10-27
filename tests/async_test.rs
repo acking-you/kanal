@@ -760,4 +760,112 @@ mod asyncs {
         assert!(r.drain_into_blocking(&mut buf).await.is_err());
         assert_eq!(buf, vec![0]);
     }
+
+    /// A waker that panics, standing in for any task whose wake-up unwinds.
+    struct PanickingWaker;
+
+    impl futures::task::ArcWake for PanickingWaker {
+        fn wake_by_ref(_: &Arc<Self>) {
+            panic!("waker panicked");
+        }
+    }
+
+    #[test]
+    fn panicking_wakers_in_batch_send_release_the_other_receivers() {
+        use std::{
+            future::Future,
+            mem::ManuallyDrop,
+            panic::{catch_unwind, AssertUnwindSafe},
+            pin::pin,
+            task::{Context, Poll},
+        };
+
+        let (tx, rx) = bounded_async::<usize>(0);
+        let panicking = futures::task::waker(Arc::new(PanickingWaker));
+        let noop = futures::task::noop_waker();
+        let mut first = pin!(rx.recv());
+        let mut second = pin!(rx.recv());
+        // Dropping a stranded receive future blocks forever, so `third` is
+        // never dropped: a regression then fails the assertion below instead
+        // of hanging the test.
+        let mut third = ManuallyDrop::new(Box::pin(rx.recv()));
+        // Two panicking wakers: the second panics while the first unwinds,
+        // which must not abort the process.
+        for future in [first.as_mut(), second.as_mut()] {
+            assert!(future
+                .poll(&mut Context::from_waker(&panicking))
+                .is_pending());
+        }
+        assert!(third
+            .as_mut()
+            .poll(&mut Context::from_waker(&noop))
+            .is_pending());
+
+        let mut batch = VecDeque::from([1, 2, 3]);
+        let sent = catch_unwind(AssertUnwindSafe(|| {
+            tx.as_sync().send_many(&mut batch)
+        }));
+        assert!(sent.is_err());
+
+        // The first receiver got its message before its waker panicked.
+        assert!(matches!(
+            first.as_mut().poll(&mut Context::from_waker(&noop)),
+            Poll::Ready(Ok(1))
+        ));
+        // The others were detached from the waitlist but never served: they
+        // must be released rather than left waiting forever.
+        assert!(matches!(
+            second.as_mut().poll(&mut Context::from_waker(&noop)),
+            Poll::Ready(Err(ReceiveError()))
+        ));
+        assert!(matches!(
+            third.as_mut().poll(&mut Context::from_waker(&noop)),
+            Poll::Ready(Err(ReceiveError()))
+        ));
+    }
+
+    #[test]
+    fn panicking_sender_waker_during_drain_keeps_each_message_once() {
+        use std::{
+            future::Future,
+            panic::{catch_unwind, AssertUnwindSafe},
+            pin::pin,
+            task::{Context, Poll},
+        };
+
+        let (tx, rx) = bounded_async::<String>(0);
+        let panicking = futures::task::waker(Arc::new(PanickingWaker));
+        let noop = futures::task::noop_waker();
+        let mut drained = Vec::new();
+        let mut second = pin!(tx.send("second".to_string()));
+        {
+            let mut drain = pin!(rx.drain_into_blocking(&mut drained));
+            assert!(drain
+                .as_mut()
+                .poll(&mut Context::from_waker(&noop))
+                .is_pending());
+            // One sender completes the waiting drain directly...
+            let mut first = pin!(tx.send("first".to_string()));
+            assert!(matches!(
+                first.as_mut().poll(&mut Context::from_waker(&noop)),
+                Poll::Ready(Ok(()))
+            ));
+            // ...and another waits with a waker that panics when woken.
+            assert!(second
+                .as_mut()
+                .poll(&mut Context::from_waker(&panicking))
+                .is_pending());
+
+            let polled = catch_unwind(AssertUnwindSafe(|| {
+                drain.as_mut().poll(&mut Context::from_waker(&noop))
+            }));
+            assert!(polled.is_err());
+            // Dropping the drain must not read the delivered message again.
+        }
+        assert!(matches!(
+            second.as_mut().poll(&mut Context::from_waker(&noop)),
+            Poll::Ready(Ok(()))
+        ));
+        assert_eq!(drained, ["first", "second"]);
+    }
 }
